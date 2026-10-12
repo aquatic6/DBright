@@ -1,3 +1,4 @@
 mcp>=1.2.0,<2.0
 openai>=1.30.0
 pyyaml>=6.0
+fastembed>=0.2.7           # 端侧 Embedding（ONNX Runtime，无需 PyTorch）

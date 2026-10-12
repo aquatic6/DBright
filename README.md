@@ -33,8 +33,8 @@
       │           │  · report_error    错误反馈             │
       ▼           └──────────────────────────────────────┘
 ┌─────────────┐              ▲            │
-│ ② Schema检索 │─────────────┘            ▼
-│Schema Agent  │           ┌──────────────────────────┐
+│ ② Schema检索 │──向量索引───┘            ▼
+│Schema Agent  │ top-k召回    ┌──────────────────────────┐
 └─────────────┘           │ ③ SQL 生成与执行           │
       │                   │ SQL Agent                │
       ▼                   │  生成 SQL ──执行──▶ 报错? ──┐
@@ -52,9 +52,16 @@
 | 模块 | 职责 | MCP 工具 |
 |------|------|----------|
 | `agents/intent_agent` | 意图理解：解析问题为结构化意图（指标、维度、筛选、时间范围） | - |
-| `agents/schema_agent` | Schema 检索：检索并裁剪相关表结构，控制 Prompt 长度 | `get_schema` |
+| `agents/schema_agent` | Schema 检索（RAG）：表结构 Embedding 向量相似度召回 top-k 相关表，生成相关表 DDL 注入 Prompt | `get_schema` |
 | `agents/sql_agent` | SQL 生成与执行：生成 SQL、执行、捕获错误、反馈重试（闭环） | `execute_sql` / `report_error` |
 | `agents/result_agent` | 结果解释：将查询结果翻译为自然语言结论 | - |
+
+### Schema RAG：Embedding 向量相似度检索
+
+1. 通过 MCP `get_schema` 获取全量表结构；
+2. 将「表级文本 + 列级文本」分别编码为 Embedding（BGE-small-zh，**ONNX Runtime 本地推理**，约 100MB，无需 GPU/PyTorch），并附加轻量中英词表（`core/schema_glossary.py`，约 70 个通用数据库术语）提供中文语义锚点；
+3. 查询向量与所有块向量余弦相似度，表得分 = 表块得分 + β × 列块最大得分（列级信号显著抑制同域干扰表）；
+4. 向量索引按 Schema 内容哈希持久化到本地，库结构变更自动重建；fastembed 不可用时自动降级为 LLM 语义裁剪。
 
 ### 「生成 — 执行 — 纠错」闭环
 
@@ -74,6 +81,8 @@ pip install -r requirements.txt
 # 本地运行模型（离线推理，可选 qwen2.5 / llama3.1 等）
 ollama pull qwen2.5:7b
 ```
+
+> 首次运行 Schema 检索时，fastembed 会自动下载 BGE-small-zh 模型（约 100MB）到本地缓存，之后完全离线。
 
 ### 2. 初始化演示数据库
 
@@ -97,6 +106,20 @@ Agent > 查询结果如下：技术部 12 人，运营部 8 人，人事部 3 �
         （执行 SQL: SELECT d.name, COUNT(*) ...，耗时 3ms，全程本地执行）
 ```
 
+## 基准测试（实测）
+
+`python scripts/bench.py [--db data/big.db] [--top-k N] [--llm]`，基于自建 15 题基准（覆盖单表/多表 JOIN/聚合/筛选/排序）：
+
+| 指标 | demo.db（3 表） | big.db（31 表，含同域干扰表） |
+|------|----------------|------------------------------|
+| recall@3（严格，必需表全部召回） | **100%** | **87%** |
+| recall@5（严格） | 100% | **93%** |
+| 检索延迟（单次） | 3.1 ms | 3.4 ms |
+| 向量索引体积 | 28 KB | 369 KB |
+| 索引冷构建耗时（一次性） | 51 ms | 825 ms |
+
+> Part B（NL→SQL 执行准确率、端到端延迟）需本地 Ollama：`python scripts/bench.py --llm`。
+
 ## 配置
 
 `config/agent_config.yml`：
@@ -115,7 +138,8 @@ pipeline:
 
 - **只读执行**：MCP Server 以 `mode=ro` URI 打开 SQLite，从机制上杜绝写入/删表；
 - **数据不出端**：LLM 推理（Ollama）与数据库均在本地，无任何网络外传；
-- **Schema 裁剪**：仅将相关表结构注入 Prompt，避免整库结构泄露给上下文。
+- **Schema 裁剪**：仅将向量检索到的相关表 DDL 注入 Prompt，避免整库结构进入上下文；
+- **索引不出端**：Embedding 模型与向量索引全部本地缓存，无任何外部向量数据库服务。
 
 ## 目录结构
 
@@ -125,7 +149,9 @@ pipeline:
 ├── core/
 │   ├── base.py                     # MoFA Agent 基类
 │   ├── llm.py                      # 本地 LLM 客户端（Ollama / OpenAI 兼容）
-│   └── mcp_client.py               # MCP 客户端封装
+│   ├── mcp_client.py               # MCP 客户端封装
+│   ├── schema_vector_store.py      # Schema 向量索引（表级+列级块，ONNX 端侧推理）
+│   └── schema_glossary.py          # 轻量中英词表（通用数据库术语语义锚点）
 ├── mcp_servers/
 │   └── sqlite_tools_server.py      # MCP Server：表结构检索 / SQL 执行 / 错误反馈
 ├── agents/
@@ -133,7 +159,13 @@ pipeline:
 │   ├── schema_agent/               # 模块② Schema 检索
 │   ├── sql_agent/                  # 模块③ SQL 生成与执行（纠错闭环）
 │   └── result_agent/               # 模块④ 结果解释
-└── scripts/init_demo_db.py         # 演示数据库初始化
+└── scripts/
+    ├── init_demo_db.py             # 演示数据库初始化（3 表）
+    ├── init_big_db.py              # 31 表演示库（电商干扰表，压测检索）
+    ├── bench.py                    # 量化基准（recall/延迟/准确率，--llm 需 Ollama）
+    ├── test_schema_retrieval.py    # Schema 检索测试
+    ├── debug_retrieval.py          # 检索诊断（查看 top-k 召回）
+    └── test_smoke.py               # MCP 链路冒烟测试
 ```
 
 ## 路线图

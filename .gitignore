@@ -3,4 +3,5 @@ __pycache__/
 .venv/
 venv/
 data/*.db
+data/schema_vec_cache/
 .env

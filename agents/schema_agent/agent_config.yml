@@ -1,5 +1,6 @@
 name: schema-agent
-description: Schema 检索模块：通过 MCP get_schema 检索并裁剪相关表结构
+description: Schema 检索模块：Embedding 向量相似度召回相关表（RAG），生成相关表 DDL
 inputs: ["intent"]
 outputs: ["relevant_schema"]
 mcp_tools: ["get_schema"]
+top_k: 3
