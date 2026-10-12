@@ -1,0 +1,11 @@
+llm:
+  base_url: "http://localhost:11434/v1"   # 本地 Ollama，OpenAI 兼容接口
+  api_key: "ollama"                        # 本地推理无需真实 Key
+  model: "qwen2.5:7b"
+  temperature: 0.0
+
+database:
+  path: "data/demo.db"                     # 本地 SQLite 文件（只读模式打开）
+
+pipeline:
+  max_retry: 3                             # SQL 生成-执行-纠错 闭环最大重试次数

@@ -1,0 +1,4 @@
+name: intent-agent
+description: 意图理解模块：将用户自然语言问题解析为结构化意图
+inputs: ["user_question"]
+outputs: ["intent"]

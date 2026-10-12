@@ -1,0 +1,6 @@
+name: sql-agent
+description: SQL 生成与执行模块：生成 SQL、MCP 执行、错误反馈纠错闭环
+inputs: ["intent", "relevant_schema"]
+outputs: ["sql", "result"]
+mcp_tools: ["execute_sql", "report_error"]
+max_retry: 3

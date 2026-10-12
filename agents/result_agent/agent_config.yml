@@ -1,0 +1,4 @@
+name: result-agent
+description: 结果解释模块：将查询结果翻译为自然语言结论
+inputs: ["question", "sql", "result"]
+outputs: ["answer"]

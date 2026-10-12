@@ -1,0 +1,5 @@
+name: schema-agent
+description: Schema 检索模块：通过 MCP get_schema 检索并裁剪相关表结构
+inputs: ["intent"]
+outputs: ["relevant_schema"]
+mcp_tools: ["get_schema"]
